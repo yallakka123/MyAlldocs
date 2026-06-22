@@ -1,0 +1,315 @@
+name: Main CI Validation Workflow
+ 
+on:
+  pull_request:
+    types: [opened, edited, synchronize, closed]
+    branches:
+      - wngmrg
+      - sit
+      - uat
+      - main
+ 
+jobs:
+  pre-checks-and-validation:
+    runs-on: ubuntu-latest
+    if: github.event.action != 'closed'
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+ 
+      # SF_WNGMRG_CONSUMER_KEY: ${{ secrets.SF_WNGMRG_CONSUMER_KEY }}
+      # SF_WNGMRG_USERNAME: ${{ secrets.SF_WNGMRG_USERNAME }}
+      # SF_WNGMRG_PRIVATE_KEY: ${{ secrets.SF_WNGMRG_PRIVATE_KEY }}
+      # SF_WNGMRG_INSTANCE_URL: ${{ secrets.SF_WNGMRG_INSTANCE_URL }}
+ 
+      # SF_SIT_CONSUMER_KEY: ${{ secrets.SF_SIT_CONSUMER_KEY }}
+      # SF_SIT_USERNAME: ${{ secrets.SF_SIT_USERNAME }}
+      # SF_SIT_PRIVATE_KEY: ${{ secrets.SF_SIT_PRIVATE_KEY }}
+      # SF_SIT_INSTANCE_URL: ${{ secrets.SF_SIT_INSTANCE_URL }}
+ 
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+ 
+      - name: Get target branch name
+        id: get_branch
+        run: echo "target_branch_name=${{ github.base_ref }}" >> $GITHUB_OUTPUT
+ 
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+ 
+      - name: Map branch to environment
+        id: map_env
+        run: |
+          chmod +x ./scripts/map_env.sh
+          ./scripts/map_env.sh "${{ steps.get_branch.outputs.target_branch_name }}"
+ 
+ 
+      - name: Load Salesforce secrets from 1Password (WNGMRG)
+        if: steps.map_env.outputs.env == 'wngmrg'
+        uses: 1password/load-secrets-action@v1
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.UAT_OP_SERVICE_ACCOUNT_TOKEN }}
+          SF_CONSUMER_KEY: op://Github Salesforce Sandbox/salesforce_mrg/consumer_key
+          SF_USERNAME: op://Github Salesforce Sandbox/salesforce_mrg/username
+          SF_PRIVATE_KEY: op://Github Salesforce Sandbox/salesforce_mrg/jwt_key
+          SF_INSTANCE_URL: op://Github Salesforce Sandbox/salesforce_mrg/ur
+ 
+ 
+      - name: Load Salesforce secrets from 1Password (SIT)
+        if: steps.map_env.outputs.env == 'sit'
+        uses: 1password/load-secrets-action@v1
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.UAT_OP_SERVICE_ACCOUNT_TOKEN }}
+          SF_CONSUMER_KEY: op://Github Salesforce Sandbox/salesforce_sit/consumer_key
+          SF_USERNAME: op://Github Salesforce Sandbox/salesforce_sit/username
+          SF_PRIVATE_KEY: op://Github Salesforce Sandbox/salesforce_sit/jwt_key
+          SF_INSTANCE_URL: op://Github Salesforce Sandbox/salesforce_sit/url
+ 
+      - name: Load Salesforce secrets from 1Password (UAT)
+        if: steps.map_env.outputs.env == 'uat'
+        uses: 1password/load-secrets-action@v1
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.UAT_OP_SERVICE_ACCOUNT_TOKEN }}          
+          SF_CONSUMER_KEY: op://Github Salesforce Sandbox/salesforce_uat/consumer_key
+          SF_USERNAME: op://Github Salesforce Sandbox/salesforce_uat/username
+          SF_PRIVATE_KEY: op://Github Salesforce Sandbox/salesforce_uat/jwt_key
+          SF_INSTANCE_URL: op://Github Salesforce Sandbox/salesforce_uat/url
+ 
+      - name: Load Salesforce secrets from 1Password (main)
+        if: steps.map_env.outputs.env == 'main'
+        uses: 1password/load-secrets-action@v1
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.PROD_OP_SERVICE_ACCOUNT_TOKEN }}          
+          SF_CONSUMER_KEY: op://Github Salesforce PROD/salesforce_prod/consumer_key
+          SF_USERNAME: op://Github Salesforce PROD/salesforce_prod/username
+          SF_PRIVATE_KEY: op://Github Salesforce PROD/salesforce_prod/jwt_key
+          SF_INSTANCE_URL: op://Github Salesforce PROD/salesforce_prod/url
+ 
+      - name: Promote UAT secrets to job environment
+        run: |
+          echo "SF_CONSUMER_KEY=$SF_CONSUMER_KEY" >> $GITHUB_ENV
+          echo "SF_USERNAME=$SF_USERNAME" >> $GITHUB_ENV
+          echo "SF_INSTANCE_URL=$SF_INSTANCE_URL" >> $GITHUB_ENV
+ 
+ 
+      - name: Static Code Analysis
+        if: steps.map_env.outputs.env == 'sit'
+        uses: ./.github/actions/source-code-analysis-action
+        with:
+          TARGET_DIR: force-app
+ 
+      # - name: PR & Commit Naming Check
+      #   if: steps.map_env.outputs.env == 'sit'
+      #   uses: ./.github/actions/pr-and-commit-messages-check-action
+      #   with:
+      #     GITHUB_TOKEN: ${{ env.GITHUB_TOKEN }}
+ 
+      - name: Metadata Naming Check
+        if: steps.map_env.outputs.env == 'sit'
+        uses: ./.github/actions/metadata-naming-conventions-check-action
+ 
+      - name: Authenticate Salesforce Org (WNGMRG)
+        if: steps.map_env.outputs.env == 'wngmrg'
+        uses: ./.github/actions/authenticate-org-action
+        with:
+          CLIENT_ID: ${{ env.SF_CONSUMER_KEY }}
+          USERNAME: ${{ env.SF_USERNAME }}
+          JWT_KEY: ${{ env.SF_PRIVATE_KEY }}
+          INSTANCE_URL: ${{ env.SF_INSTANCE_URL }}
+          ALIAS: wngmrg
+ 
+      - name: Authenticate Salesforce Org (SIT)
+        if: steps.map_env.outputs.env == 'sit'
+        uses: ./.github/actions/authenticate-org-action
+        with:
+          CLIENT_ID: ${{ env.SF_CONSUMER_KEY }}
+          USERNAME: ${{ env.SF_USERNAME }}
+          JWT_KEY: ${{ env.SF_PRIVATE_KEY }}
+          INSTANCE_URL: ${{ env.SF_INSTANCE_URL }}
+          ALIAS: sit
+ 
+      - name: Authenticate Salesforce Org (UAT)
+        if: steps.map_env.outputs.env == 'uat'
+        uses: ./.github/actions/authenticate-org-action
+        with:
+          CLIENT_ID: ${{ env.SF_CONSUMER_KEY }}
+          USERNAME: ${{ env.SF_USERNAME }}
+          JWT_KEY: ${{ env.SF_PRIVATE_KEY }}
+          INSTANCE_URL: ${{ env.SF_INSTANCE_URL }}
+          ALIAS: uat
+ 
+      - name: Authenticate Salesforce Org (main)
+        if: steps.map_env.outputs.env == 'main'
+        uses: ./.github/actions/authenticate-org-action
+        with:
+          CLIENT_ID: ${{ env.SF_CONSUMER_KEY }}
+          USERNAME: ${{ env.SF_USERNAME }}
+          JWT_KEY: ${{ env.SF_PRIVATE_KEY }}
+          INSTANCE_URL: ${{ env.SF_INSTANCE_URL }}
+          ALIAS: main
+ 
+      - name: Validate Metadata (Check-Only)
+        uses: ./.github/actions/metadata-validation-on-target-org-action
+        with:
+          TARGET_ENV: ${{ steps.map_env.outputs.env }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          WAIT_MINUTES: "60"
+          TEST_LEVEL: RunLocalTests
+          SOURCE_DIR: force-app
+ 
+      - name: Upload delta package artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: salesforce-metadata-delta
+          path: delta
+ 
+  deploy-on-target-org:
+    runs-on: ubuntu-latest    
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    needs: pre-checks-and-validation
+    if: >
+      always() &&
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true
+ 
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
+ 
+      - name: Show commit we are deploying
+        run: |
+          echo "Merge SHA: ${{ github.event.pull_request.merge_commit_sha }}"
+          git rev-parse HEAD
+          git log --oneline -n 5
+ 
+      - name: Get branch name
+        id: get_branch
+        run: echo "target_branch_name=${{ github.base_ref }}" >> $GITHUB_OUTPUT
+ 
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+ 
+      - name: Map branch to environment
+        id: map_env
+        run: |
+          chmod +x ./scripts/map_env.sh
+          ./scripts/map_env.sh "${{ steps.get_branch.outputs.target_branch_name }}"
+ 
+      - name: Load Salesforce secrets from 1Password (WNGMRG)
+        if: steps.map_env.outputs.env == 'wngmrg'
+        uses: 1password/load-secrets-action@v1
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.UAT_OP_SERVICE_ACCOUNT_TOKEN }}
+          SF_CONSUMER_KEY: op://Github Salesforce Sandbox/salesforce_mrg/consumer_key
+          SF_USERNAME: op://Github Salesforce Sandbox/salesforce_mrg/username
+          SF_PRIVATE_KEY: op://Github Salesforce Sandbox/salesforce_mrg/jwt_key
+          SF_INSTANCE_URL: op://Github Salesforce Sandbox/salesforce_mrg/ur
+ 
+ 
+      - name: Load Salesforce secrets from 1Password (SIT)
+        if: steps.map_env.outputs.env == 'sit'
+        uses: 1password/load-secrets-action@v1
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.UAT_OP_SERVICE_ACCOUNT_TOKEN }}
+          SF_CONSUMER_KEY: op://Github Salesforce Sandbox/salesforce_sit/consumer_key
+          SF_USERNAME: op://Github Salesforce Sandbox/salesforce_sit/username
+          SF_PRIVATE_KEY: op://Github Salesforce Sandbox/salesforce_sit/jwt_key
+          SF_INSTANCE_URL: op://Github Salesforce Sandbox/salesforce_sit/url
+ 
+ 
+      - name: Load Salesforce secrets from 1Password (UAT)
+        if: steps.map_env.outputs.env == 'uat'
+        uses: 1password/load-secrets-action@v1
+        with:
+          export-env: true
+        env:
+            OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.UAT_OP_SERVICE_ACCOUNT_TOKEN }}
+ 
+            SF_CONSUMER_KEY: op://Github Salesforce Sandbox/salesforce_uat/consumer_key
+            SF_USERNAME: op://Github Salesforce Sandbox/salesforce_uat/username
+            SF_PRIVATE_KEY: op://Github Salesforce Sandbox/salesforce_uat/jwt_key
+            SF_INSTANCE_URL: op://Github Salesforce Sandbox/salesforce_uat/url
+ 
+      - name: Load Salesforce secrets from 1Password (main)
+        if: steps.map_env.outputs.env == 'main'
+        uses: 1password/load-secrets-action@v1
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.PROD_OP_SERVICE_ACCOUNT_TOKEN }}          
+          SF_CONSUMER_KEY: op://Github Salesforce PROD/salesforce_prod/consumer_key
+          SF_USERNAME: op://Github Salesforce PROD/salesforce_prod/username
+          SF_PRIVATE_KEY: op://Github Salesforce PROD/salesforce_prod/jwt_key
+          SF_INSTANCE_URL: op://Github Salesforce PROD/salesforce_prod/url
+ 
+      - name: Authenticate Salesforce Org (WNGMRG)
+        if: steps.map_env.outputs.env == 'wngmrg'
+        uses: ./.github/actions/authenticate-org-action
+        with:
+          CLIENT_ID: ${{ env.SF_CONSUMER_KEY }}
+          USERNAME: ${{ env.SF_USERNAME }}
+          JWT_KEY: ${{ env.SF_PRIVATE_KEY }}
+          INSTANCE_URL: ${{ env.SF_INSTANCE_URL }}
+          ALIAS: wngmrg
+ 
+      - name: Authenticate Salesforce Org (SIT)
+        if: steps.map_env.outputs.env == 'sit'
+        uses: ./.github/actions/authenticate-org-action
+        with:
+          CLIENT_ID: ${{ env.SF_CONSUMER_KEY }}
+          USERNAME: ${{ env.SF_USERNAME }}
+          JWT_KEY: ${{ env.SF_PRIVATE_KEY }}
+          INSTANCE_URL: ${{ env.SF_INSTANCE_URL }}
+          ALIAS: sit
+ 
+      - name: Authenticate Salesforce Org (UAT)
+        if: steps.map_env.outputs.env == 'uat'
+        uses: ./.github/actions/authenticate-org-action
+        with:
+          CLIENT_ID: ${{ env.SF_CONSUMER_KEY }}
+          USERNAME: ${{ env.SF_USERNAME }}
+          JWT_KEY: ${{ env.SF_PRIVATE_KEY }}
+          INSTANCE_URL: ${{ env.SF_INSTANCE_URL }}
+          ALIAS: uat
+ 
+      - name: Authenticate Salesforce Org (main)
+        if: steps.map_env.outputs.env == 'main'
+        uses: ./.github/actions/authenticate-org-action
+        with:
+          CLIENT_ID: ${{ env.SF_CONSUMER_KEY }}
+          USERNAME: ${{ env.SF_USERNAME }}
+          JWT_KEY: ${{ env.SF_PRIVATE_KEY }}
+          INSTANCE_URL: ${{ env.SF_INSTANCE_URL }}
+          ALIAS: main
+ 
+      - name: Deploy Metadata
+        uses: ./.github/actions/deployment-to-target-org
+        with:
+          TARGET_ENV: ${{ steps.map_env.outputs.env }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          WAIT_MINUTES: "90"
+          TEST_LEVEL: RunLocalTests
+          SOURCE_DIR: force-app
+          API_VERSION: "59.0"
